@@ -1,12 +1,13 @@
+using LinePutScript.Localization.WPF;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
-using System.Linq;
-using System.Collections.Generic;
+using System.Windows.Forms;
 using VPet_Simulator.Windows.Interface;
 using VPetLLM.Handlers;
-using LinePutScript.Localization.WPF;
 
 namespace VPetLLM.Core.ChatCore
 {
@@ -256,7 +257,9 @@ namespace VPetLLM.Core.ChatCore
                     var responseObject = JObject.Parse(responseString);
                     message = responseObject["choices"][0]["message"]["content"].ToString();
                     var tokenUsage = responseObject["usage"]["total_tokens"].ToString();
-                    Utils.Logger.Log("OpenAI非流式: 收到完整消息，长度: {0}，Token用量：{1}".Translate(message.Length,tokenUsage));
+                    var cachedUsage = responseObject["usage"]["prompt_cache_hit_tokens"].ToString();
+                    var missedUsage = responseObject["usage"]["prompt_cache_miss_tokens"].ToString();
+                    Utils.Logger.Log("OpenAI非流式: 收到完整消息，长度: {0}，Token用量：{1}，命中缓存:{2}，未命中缓存{3}".Translate(message.Length,tokenUsage,cachedUsage,missedUsage));
                     // 非流式模式下，一次性处理完整消息
                     ResponseHandler?.Invoke(message);
                 }
@@ -318,6 +321,8 @@ namespace VPetLLM.Core.ChatCore
                 response.EnsureSuccessStatusCode();
                 var responseString = await response.Content.ReadAsStringAsync();
                 var responseObject = JObject.Parse(responseString);
+                var tokenUsage = responseObject["usage"]["total_tokens"].ToString();
+                Utils.Logger.Log("OpenAI非流式:历史消息总结完毕，Token用量：{0}".Translate(tokenUsage));
                 return responseObject["choices"][0]["message"]["content"].ToString();
             }
         }
