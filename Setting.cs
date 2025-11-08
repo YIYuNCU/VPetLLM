@@ -24,6 +24,7 @@ namespace VPetLLM
         public bool EnableAction { get; set; } = true;
         public bool EnableBuy { get; set; } = true;
         public bool EnableState { get; set; } = true;
+        public bool ReduceInputTokenUsage { get; set; } = false;
         public bool EnableActionExecution { get; set; } = true;
         public int SayTimeMultiplier { get; set; } = 200;
         public int SayTimeMin { get; set; } = 2000;
@@ -466,6 +467,9 @@ namespace VPetLLM
 
             // GPT-SoVITS TTS 设置
             public GPTSoVITSTTSSetting GPTSoVITS { get; set; } = new GPTSoVITSTTSSetting();
+
+            // Free TTS 设置（无需配置，使用固定参数）
+            public FreeTTSSetting Free { get; set; } = new FreeTTSSetting();
         }
 
         public class URLTTSSetting
@@ -517,6 +521,11 @@ namespace VPetLLM
             public double TopP { get; set; } = 1.0;
             public double Temperature { get; set; } = 1.0;
             public double Speed { get; set; } = 1.0;
+        }
+
+        public class FreeTTSSetting
+        {
+            // Free TTS 使用固定参数，无需用户配置
         }
 
         public class RateLimiterSetting

@@ -56,9 +56,15 @@ namespace VPetLLM.UI.Windows
         {
             get
             {
-                // 如果 DefaultPluginChecker 存在且插件已初始化，检查是否需要添加横幅
                 try
                 {
+                    // 确保语言资源已加载
+                    if (string.IsNullOrEmpty(LocalizationService.Instance.LangCode))
+                    {
+                        LocalizationService.Instance.ChangeLanguage(_plugin?.Settings?.Language ?? "zh-hans");
+                    }
+                    
+                    // 如果 DefaultPluginChecker 存在且插件已初始化，检查是否需要添加横幅
                     if (_plugin != null)
                     {
                         bool isDefaultPlugin = _plugin.IsVPetLLMDefaultPlugin();
@@ -280,9 +286,6 @@ namespace VPetLLM.UI.Windows
             InitializeComponent();
             _plugin = plugin;
             
-            // 设置窗口标题
-            this.Title = WindowTitle;
-            
             // 初始化触摸反馈设置控件
             InitializeTouchFeedbackSettings();
             _plugin.SettingWindow = this;
@@ -294,17 +297,29 @@ namespace VPetLLM.UI.Windows
             
             Loaded += (s, e) =>
             {
-                UpdateUIForLanguage();
+                // 先确保语言资源已加载
+                LanguageHelper.ReloadLanguages();
+                
                 // 同步本地化服务的语言，确保 XAML 中 {utils:Localize} 初次加载和后续切换都正确刷新
                 LocalizationService.Instance.ChangeLanguage(_plugin.Settings.Language);
-                // 更新窗口标题（在语言设置加载后）
+                
+                // 更新UI语言
+                UpdateUIForLanguage();
+                
+                // 在语言资源完全加载后设置窗口标题
                 this.Title = WindowTitle;
+                
                 // 监听全局本地化变更，自动刷新手动赋值的 UI（如列头）
                 LocalizationService.Instance.PropertyChanged += (sender2, e2) =>
                 {
                     if (e2.PropertyName == "Item[]")
                     {
-                        Dispatcher.BeginInvoke(new Action(UpdateUIForLanguage), System.Windows.Threading.DispatcherPriority.Background);
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            UpdateUIForLanguage();
+                            // 语言变化时也更新窗口标题
+                            this.Title = WindowTitle;
+                        }), System.Windows.Threading.DispatcherPriority.Background);
                     }
                 };
                 Button_RefreshPlugins_Click(this, new RoutedEventArgs());
@@ -350,6 +365,7 @@ namespace VPetLLM.UI.Windows
             ((CheckBox)this.FindName("CheckBox_EnableAction")).Click += Control_Click;
             ((CheckBox)this.FindName("CheckBox_EnableBuy")).Click += Control_Click;
             ((CheckBox)this.FindName("CheckBox_EnableState")).Click += Control_Click;
+            ((CheckBox)this.FindName("CheckBox_ReduceInputTokenUsage")).Click += Control_Click;
             ((CheckBox)this.FindName("CheckBox_EnableActionExecution")).Click += Control_Click;
             ((CheckBox)this.FindName("CheckBox_EnableMove")).Click += Control_Click;
             ((CheckBox)this.FindName("CheckBox_EnableTime")).Click += Control_Click;
@@ -694,6 +710,7 @@ namespace VPetLLM.UI.Windows
             ((CheckBox)this.FindName("CheckBox_EnableAction")).IsChecked = _plugin.Settings.EnableAction;
             ((CheckBox)this.FindName("CheckBox_EnableBuy")).IsChecked = _plugin.Settings.EnableBuy;
             ((CheckBox)this.FindName("CheckBox_EnableState")).IsChecked = _plugin.Settings.EnableState;
+            ((CheckBox)this.FindName("CheckBox_ReduceInputTokenUsage")).IsChecked = _plugin.Settings.ReduceInputTokenUsage;
             ((CheckBox)this.FindName("CheckBox_EnableActionExecution")).IsChecked = _plugin.Settings.EnableActionExecution;
             ((CheckBox)this.FindName("CheckBox_EnableMove")).IsChecked = _plugin.Settings.EnableMove;
             ((CheckBox)this.FindName("CheckBox_EnableTime")).IsChecked = _plugin.Settings.EnableTime;
@@ -849,7 +866,8 @@ namespace VPetLLM.UI.Windows
                 }
             }
 
-            // DIY TTS 配置通过 JSON 文件管理，无需在此加载
+            // 加载 DIY TTS 配置
+            LoadDIYTTSSettings();
 
             // 触发提供商切换事件来显示正确的面板
             ComboBox_TTS_Provider_SelectionChanged(providerComboBox, null);
@@ -989,6 +1007,7 @@ namespace VPetLLM.UI.Windows
             _plugin.Settings.EnableAction = enableActionCheckBox.IsChecked ?? true;
             _plugin.Settings.EnableBuy = enableBuyCheckBox.IsChecked ?? true;
             _plugin.Settings.EnableState = enableStateCheckBox.IsChecked ?? true;
+            _plugin.Settings.ReduceInputTokenUsage = ((CheckBox)this.FindName("CheckBox_ReduceInputTokenUsage")).IsChecked ?? false;
             _plugin.Settings.EnableActionExecution = enableActionExecutionCheckBox.IsChecked ?? true;
             _plugin.Settings.EnableMove = enableMoveCheckBox.IsChecked ?? true;
             _plugin.Settings.EnableTime = enableTimeCheckBox.IsChecked ?? true;
@@ -1118,7 +1137,8 @@ namespace VPetLLM.UI.Windows
                 _plugin.Settings.TTS.OpenAI.Format = selectedFormatItem.Tag?.ToString() ?? "mp3";
             }
 
-            // DIY TTS 配置通过 JSON 文件管理，无需在此保存
+            // 保存 DIY TTS 配置
+            SaveDIYTTSSettings();
 
             // 保存 GPT-SoVITS 设置
             SaveGPTSoVITSSettings();
@@ -1199,7 +1219,13 @@ namespace VPetLLM.UI.Windows
 
             if (oldProvider != newProvider)
             {
-                var oldHistory = _plugin.ChatCore.GetChatHistory();
+                // 提供商切换时的历史记录处理
+                Utils.Logger.Log($"提供商从 {oldProvider} 切换到 {newProvider}");
+                
+                // 先保存当前历史到数据库（确保不丢失）
+                _plugin.ChatCore?.SaveHistory();
+                
+                // 创建新的ChatCore实例
                 IChatCore newChatCore = newProvider switch
                 {
                     Setting.LLMType.Ollama => new OllamaChatCore(_plugin.Settings.Ollama, _plugin.Settings, _plugin.MW, _plugin.ActionProcessor),
@@ -1208,16 +1234,23 @@ namespace VPetLLM.UI.Windows
                     Setting.LLMType.Free => new FreeChatCore(_plugin.Settings.Free, _plugin.Settings, _plugin.MW, _plugin.ActionProcessor),
                     _ => throw new NotImplementedException()
                 };
-                if (_plugin.Settings.EnableChatHistory && oldHistory != null)
-                {
-                    newChatCore.SetChatHistory(oldHistory);
-                }
+                
+                // 新的ChatCore在构造时已经通过HistoryManager.LoadHistory()加载了历史
+                // 如果SeparateChatByProvider=false，会自动加载所有历史（包括旧提供商的）
+                // 如果SeparateChatByProvider=true，会加载新提供商的历史
+                // 因此不需要手动SetChatHistory，让HistoryManager自动处理即可
+                
+                Utils.Logger.Log($"新ChatCore已创建，历史记录已根据设置自动加载（SeparateChatByProvider={_plugin.Settings.SeparateChatByProvider}）");
                 _plugin.UpdateChatCore(newChatCore);
             }
             else
             {
                 // 如果提供商没变，也需要重新创建ChatCore以应用新的设置
-                var currentHistory = _plugin.ChatCore.GetChatHistory();
+                Utils.Logger.Log($"提供商未变化，重新创建ChatCore以应用新设置");
+                
+                // 先保存当前历史
+                _plugin.ChatCore?.SaveHistory();
+                
                 IChatCore updatedChatCore = newProvider switch
                 {
                     Setting.LLMType.Ollama => new OllamaChatCore(_plugin.Settings.Ollama, _plugin.Settings, _plugin.MW, _plugin.ActionProcessor),
@@ -1226,10 +1259,8 @@ namespace VPetLLM.UI.Windows
                     Setting.LLMType.Free => new FreeChatCore(_plugin.Settings.Free, _plugin.Settings, _plugin.MW, _plugin.ActionProcessor),
                     _ => throw new NotImplementedException()
                 };
-                if (_plugin.Settings.EnableChatHistory && currentHistory != null)
-                {
-                    updatedChatCore.SetChatHistory(currentHistory);
-                }
+                
+                // 同样让HistoryManager自动加载历史
                 _plugin.UpdateChatCore(updatedChatCore);
             }
             _plugin.UpdateActionProcessor();
@@ -2796,11 +2827,13 @@ private void Button_RefreshPlugins_Click(object sender, RoutedEventArgs e)
                     var openAIPanel = FindName("Panel_TTS_OpenAI") as StackPanel;
                     var diyPanel = FindName("Panel_TTS_DIY") as StackPanel;
                     var gptSoVITSPanel = FindName("Panel_TTS_GPTSoVITS") as StackPanel;
+                    var freePanel = FindName("Panel_TTS_Free") as StackPanel;
 
                     if (urlPanel != null) urlPanel.Visibility = Visibility.Collapsed;
                     if (openAIPanel != null) openAIPanel.Visibility = Visibility.Collapsed;
                     if (diyPanel != null) diyPanel.Visibility = Visibility.Collapsed;
                     if (gptSoVITSPanel != null) gptSoVITSPanel.Visibility = Visibility.Collapsed;
+                    if (freePanel != null) freePanel.Visibility = Visibility.Collapsed;
 
                     // 显示对应的面板
                     switch (provider)
@@ -2841,6 +2874,17 @@ private void Button_RefreshPlugins_Click(object sender, RoutedEventArgs e)
                                 System.Diagnostics.Debug.WriteLine("[TTS Provider] 错误: 找不到GPT-SoVITS面板!");
                             }
                             break;
+                        case "Free":
+                            if (freePanel != null)
+                            {
+                                freePanel.Visibility = Visibility.Visible;
+                                System.Diagnostics.Debug.WriteLine("[TTS Provider] 显示Free面板");
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine("[TTS Provider] 错误: 找不到Free面板!");
+                            }
+                            break;
                         default:
                             System.Diagnostics.Debug.WriteLine($"[TTS Provider] 未知提供商: {provider}");
                             break;
@@ -2856,29 +2900,184 @@ private void Button_RefreshPlugins_Click(object sender, RoutedEventArgs e)
             ScheduleAutoSave();
         }
 
-        private void Button_TTS_DIY_OpenConfig_Click(object sender, RoutedEventArgs e)
+        // DIY TTS 配置加载
+        private void LoadDIYTTSSettings()
         {
+            var diySettings = _plugin.Settings.TTS.DIY;
+            
+            // 加载请求方法
+            var methodComboBox = FindName("ComboBox_TTS_DIY_Method") as ComboBox;
+            if (methodComboBox != null)
+            {
+                foreach (ComboBoxItem item in methodComboBox.Items)
+                {
+                    if (item.Content.ToString() == diySettings.Method)
+                    {
+                        methodComboBox.SelectedItem = item;
+                        break;
+                    }
+                }
+            }
+
+            // 加载 URL
+            var urlTextBox = FindName("TextBox_TTS_DIY_BaseUrl") as TextBox;
+            if (urlTextBox != null)
+            {
+                urlTextBox.Text = diySettings.BaseUrl;
+            }
+
+            // 加载 Content-Type
+            var contentTypeTextBox = FindName("TextBox_TTS_DIY_ContentType") as TextBox;
+            if (contentTypeTextBox != null)
+            {
+                contentTypeTextBox.Text = diySettings.ContentType;
+            }
+
+            // 加载请求头
+            var headersDataGrid = FindName("DataGrid_TTS_DIY_Headers") as DataGrid;
+            if (headersDataGrid != null)
+            {
+                headersDataGrid.ItemsSource = new System.Collections.ObjectModel.ObservableCollection<Setting.CustomHeader>(
+                    diySettings.CustomHeaders ?? new List<Setting.CustomHeader>()
+                );
+            }
+
+            // 加载请求体
+            var bodyTextBox = FindName("TextBox_TTS_DIY_RequestBody") as TextBox;
+            if (bodyTextBox != null)
+            {
+                bodyTextBox.Text = diySettings.RequestBody;
+            }
+
+            // 加载响应格式
+            var formatComboBox = FindName("ComboBox_TTS_DIY_ResponseFormat") as ComboBox;
+            if (formatComboBox != null)
+            {
+                foreach (ComboBoxItem item in formatComboBox.Items)
+                {
+                    if (item.Content.ToString() == diySettings.ResponseFormat)
+                    {
+                        formatComboBox.SelectedItem = item;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // DIY TTS 配置保存
+        private void SaveDIYTTSSettings()
+        {
+            var diySettings = _plugin.Settings.TTS.DIY;
+
+            // 保存请求方法
+            var methodComboBox = FindName("ComboBox_TTS_DIY_Method") as ComboBox;
+            if (methodComboBox?.SelectedItem is ComboBoxItem methodItem)
+            {
+                diySettings.Method = methodItem.Content.ToString();
+            }
+
+            // 保存 URL
+            var urlTextBox = FindName("TextBox_TTS_DIY_BaseUrl") as TextBox;
+            if (urlTextBox != null)
+            {
+                diySettings.BaseUrl = urlTextBox.Text;
+            }
+
+            // 保存 Content-Type
+            var contentTypeTextBox = FindName("TextBox_TTS_DIY_ContentType") as TextBox;
+            if (contentTypeTextBox != null)
+            {
+                diySettings.ContentType = contentTypeTextBox.Text;
+            }
+
+            // 保存请求头
+            var headersDataGrid = FindName("DataGrid_TTS_DIY_Headers") as DataGrid;
+            if (headersDataGrid?.ItemsSource is System.Collections.ObjectModel.ObservableCollection<Setting.CustomHeader> headers)
+            {
+                diySettings.CustomHeaders = headers.ToList();
+            }
+
+            // 保存请求体
+            var bodyTextBox = FindName("TextBox_TTS_DIY_RequestBody") as TextBox;
+            if (bodyTextBox != null)
+            {
+                diySettings.RequestBody = bodyTextBox.Text;
+            }
+
+            // 保存响应格式
+            var formatComboBox = FindName("ComboBox_TTS_DIY_ResponseFormat") as ComboBox;
+            if (formatComboBox?.SelectedItem is ComboBoxItem formatItem)
+            {
+                diySettings.ResponseFormat = formatItem.Content.ToString();
+            }
+        }
+
+        // 添加请求头
+        private void Button_TTS_DIY_AddHeader_Click(object sender, RoutedEventArgs e)
+        {
+            var headersDataGrid = FindName("DataGrid_TTS_DIY_Headers") as DataGrid;
+            if (headersDataGrid?.ItemsSource is System.Collections.ObjectModel.ObservableCollection<Setting.CustomHeader> headers)
+            {
+                headers.Add(new Setting.CustomHeader
+                {
+                    Key = "Authorization",
+                    Value = "Bearer YOUR_API_KEY",
+                    IsEnabled = true
+                });
+            }
+        }
+
+        // 删除请求头
+        private void Button_TTS_DIY_DeleteHeader_Click(object sender, RoutedEventArgs e)
+        {
+            var button = sender as Button;
+            var header = button?.DataContext as Setting.CustomHeader;
+            
+            var headersDataGrid = FindName("DataGrid_TTS_DIY_Headers") as DataGrid;
+            if (headersDataGrid?.ItemsSource is System.Collections.ObjectModel.ObservableCollection<Setting.CustomHeader> headers && header != null)
+            {
+                headers.Remove(header);
+            }
+        }
+
+        // 测试 DIY TTS
+        private async void Button_TTS_DIY_Test_Click(object sender, RoutedEventArgs e)
+        {
+            var button = sender as Button;
+            StartButtonLoadingAnimation(button);
+
             try
             {
-                // DIY TTS 配置已集成到主配置系统中，无需独立配置文件
-                // 显示说明信息
-                var message = "DIY TTS 配置已集成到 VPetLLM 主设置中。\n\n" +
-                             "配置位置：VPetLLM 设置 -> TTS 标签页 -> DIY 提供商\n\n" +
-                             "您可以在主设置界面中直接配置 DIY TTS 的所有参数，包括：\n" +
-                             "• BaseUrl - API 基础地址\n" +
-                             "• Method - 请求方法 (GET/POST)\n" +
-                             "• RequestBody - 请求体模板\n" +
-                             "• CustomHeaders - 自定义请求头\n" +
-                             "• ResponseFormat - 响应格式\n\n" +
-                             "详细配置说明请参考文档。";
+                // 临时保存当前 DIY TTS 配置
+                SaveDIYTTSSettings();
 
-                MessageBox.Show(message, "DIY TTS 配置说明",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
+                // 重新创建TTS服务实例以使用最新设置
+                _ttsService?.Dispose();
+                _ttsService = new TTSService(_plugin.Settings.TTS, _plugin.Settings.Proxy);
+
+                if (_ttsService != null)
+                {
+                    var success = await _ttsService.TestTTSAsync();
+                    if (success)
+                    {
+                        MessageBox.Show("DIY TTS 测试成功！音频已播放。",
+                            "测试成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    else
+                    {
+                        MessageBox.Show("DIY TTS 测试失败，请检查配置和网络连接。",
+                            "测试失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"显示配置说明失败：{ex.Message}",
+                MessageBox.Show($"测试失败：{ex.Message}",
                     "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                StopButtonLoadingAnimation(button);
             }
         }
 
