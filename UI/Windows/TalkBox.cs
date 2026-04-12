@@ -8,7 +8,8 @@ namespace VPetLLM.UI.Windows
     {
         public override string APIName { get; } = "VPetLLM";
         private readonly VPetLLM _plugin;
-        private readonly SmartMessageProcessor _messageProcessor;
+        private SmartMessageProcessor? _messageProcessor;
+        private readonly object _messageProcessorLock = new object();
         public event Action<string> OnSendMessage;
 
         // 思考动画控制
@@ -24,14 +25,27 @@ namespace VPetLLM.UI.Windows
         private static readonly SemaphoreSlim _responseLock = new SemaphoreSlim(1, 1);
 
         /// <summary>
-        /// 获取消息处理器（用于流式处理等待）
+        /// 获取消息处理器（延迟初始化，首次使用时创建）
         /// </summary>
-        public SmartMessageProcessor MessageProcessor => _messageProcessor;
+        public SmartMessageProcessor MessageProcessor
+        {
+            get
+            {
+                if (_messageProcessor is null)
+                {
+                    lock (_messageProcessorLock)
+                    {
+                        _messageProcessor ??= new SmartMessageProcessor(_plugin);
+                    }
+                }
+                return _messageProcessor;
+            }
+        }
 
         /// <summary>
         /// 获取统一气泡门面（新系统）
         /// </summary>
-        public UnifiedBubbleFacade BubbleFacade => _messageProcessor?.BubbleFacade;
+        public UnifiedBubbleFacade? BubbleFacade => _messageProcessor?.BubbleFacade;
 
         /// <summary>
         /// 获取气泡管理器（向后兼容，已弃用）
@@ -48,7 +62,6 @@ namespace VPetLLM.UI.Windows
         public TalkBox(VPetLLM plugin) : base(plugin)
         {
             _plugin = plugin;
-            _messageProcessor = new SmartMessageProcessor(_plugin);
             if (_plugin.ChatCore is not null)
             {
                 _plugin.ChatCore.SetResponseHandler(HandleResponse);
@@ -150,7 +163,7 @@ namespace VPetLLM.UI.Windows
                     else
                     {
                         // 流式片段，直接使用现有的流式处理逻辑
-                        await _messageProcessor.ProcessMessageAsync(response, !isFirstResponse, autoSetIdleOnComplete: false);
+                        await MessageProcessor.ProcessMessageAsync(response, !isFirstResponse, autoSetIdleOnComplete: false);
                     }
                 }
                 catch (Exception ex)
@@ -755,7 +768,7 @@ namespace VPetLLM.UI.Windows
         private async Task ProcessCompleteMessageAsStreaming(string completeMessage)
         {
             // 检查是否需要使用独占会话模式
-            var vpetTTSIntegration = _messageProcessor.GetVPetTTSIntegration();
+            var vpetTTSIntegration = MessageProcessor.GetVPetTTSIntegration();
             var useExclusiveSession = vpetTTSIntegration?.CanUseExclusiveMode() ?? false;
             string exclusiveSessionId = null;
 
@@ -795,7 +808,7 @@ namespace VPetLLM.UI.Windows
                             // 所有命令都传递 skipInit=true，因为独占会话已经在外层启动
                             // autoSetIdleOnComplete=false，让最后统一管理状态灯
                             // 传递会话 ID，让 SmartMessageProcessor 知道外部会话的存在
-                            await _messageProcessor.ProcessMessageAsync(
+                            await MessageProcessor.ProcessMessageAsync(
                                 command, 
                                 skipInitialization: true, 
                                 autoSetIdleOnComplete: false,

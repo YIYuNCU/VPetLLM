@@ -207,37 +207,10 @@ namespace VPetLLM
             // 初始化 ActionProcessor
             InitializeActionProcessor();
 
-            // 初始化 Free 服务配置
-            InitializeFreeServices();
-
-            // 初始化 ChatCore
-            InitializeChatCore();
-
             // 初始化名称同步定时器
             InitializeSyncTimer();
 
-            // 初始化 TTS 服务（旧版）
-            InitializeLegacyTTSService();
-
-            // 初始化配置优化器
-            InitializeConfigurationOptimizer();
-
-            // 初始化应用服务
-            InitializeApplicationServices();
-
-            // 注册服务到 DI 容器
-            RegisterServices();
-
-            // 加载插件
-            LoadPlugins();
-
-            // 初始化默认插件检查器
-            _defaultPluginChecker = new DefaultPluginChecker(this);
-
-            // 初始化 LLM 入口点
-            InitializeLLMEntry();
-
-            Logger.Log("VPetLLM plugin constructor finished.");
+            Logger.Log("VPetLLM plugin constructor finished (heavy init deferred to LoadPlugin).");
         }
 
         #endregion
@@ -274,19 +247,15 @@ namespace VPetLLM
             }
         }
 
-        private void InitializeFreeServices()
+        private async Task InitializeFreeServicesAsync()
         {
             try
             {
                 Logger.Log("开始初始化Free配置...");
-                // 清理未加密的配置文件
                 FreeConfigCleaner.CleanUnencryptedConfigs();
-                // 同步等待配置初始化完成
-                var configTask = FreeConfigManager.InitializeConfigsAsync();
-                configTask.Wait();
-                Logger.Log($"Free配置初始化完成: {configTask.Result}");
+                var result = await FreeConfigManager.InitializeConfigsAsync();
+                Logger.Log($"Free配置初始化完成: {result}");
 
-                // 初始化 Free ASR/TTS 认证委托
                 InitializeFreeAuthProviders();
             }
             catch (Exception ex)
@@ -449,11 +418,11 @@ namespace VPetLLM
         {
             if (Settings.FollowVPetName)
             {
-                Application.Current.Dispatcher.Invoke(() =>
+                Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     Settings.AiName = MW.Core.Save.Name;
                     Settings.UserName = MW.Core.Save.HostName;
-                });
+                }));
             }
         }
 
@@ -615,91 +584,113 @@ namespace VPetLLM
 
         public override void LoadPlugin()
         {
-            try
+            Logger.Log("LoadPlugin started (async initialization).");
+
+            _ = Task.Run(async () =>
             {
-                Logger.Log("LoadPlugin started.");
-
-                // 初始化气泡延迟控制（性能优化）
-                InitializeBubbleDelayControl();
-
-                // 检测 VPet.Plugin.VPetTTS 插件
-                DetectAndHandleVPetTTSPlugin();
-
-                // 初始化熔断器配置
-                InitializeRateLimiter();
-
-                // 加载聊天历史
-                ChatCore?.LoadHistory();
-
-                // 启动所有服务
-                _serviceManager.StartAsync().Wait();
-
-                // 订阅事件
-                SubscribeToEvents();
-
-                // 初始化UI组件
-                Application.Current.Dispatcher.Invoke(() =>
+                try
                 {
-                    Logger.Log("Dispatcher.Invoke started.");
+                    Logger.Log("LoadPlugin: Background initialization started.");
 
-                    // 创建和注册 TalkBox
-                    if (TalkBox is not null)
-                    {
-                        MW.TalkAPI.Remove(TalkBox);
-                    }
-                    TalkBox = new UI.Windows.TalkBox(this);
-                    MW.TalkAPI.Add(TalkBox);
+                    await InitializeFreeServicesAsync();
+                    InitializeChatCore();
+                    InitializeLegacyTTSService();
+                    InitializeConfigurationOptimizer();
+                    InitializeApplicationServices();
+                    RegisterServices();
+                    LoadPlugins();
+                    _defaultPluginChecker = new DefaultPluginChecker(this);
+                    InitializeLLMEntry();
 
-                    // 添加菜单项
-                    var menuItem = new MenuItem()
-                    {
-                        Header = "VPetLLM",
-                        HorizontalContentAlignment = HorizontalAlignment.Center,
-                    };
-                    menuItem.Click += (s, e) => this.Setting();
-                    MW.Main.ToolBar.MenuMODConfig.Items.Add(menuItem);
+                    Logger.Log("LoadPlugin: Background initialization completed.");
 
-                    // 在LoadPlugin阶段初始化TouchInteractionHandler，确保Main窗口已经完全加载
-                    InitializeTouchInteractionHandler();
+                    ChatCore?.LoadHistory();
 
-                    // 监听购买事件 - 使用TakeItemHandle以获取购买来源信息
-                    RegisterTakeItemHandleEvent();
-                    Logger.Log("Purchase event listener registered.");
+                    await _serviceManager.StartAsync();
 
-                    // 注册物品使用监听 - 通过 Hook Item.UseAction 静态字典
-                    RegisterItemUseHook();
-                    Logger.Log("Item use hook registered.");
+                    Logger.Log("LoadPlugin: Services started, initializing UI...");
 
-                    // 初始化语音输入快捷键
-                    InitializeVoiceInputHotkey();
+                    await InitializeUIComponentsAsync();
 
-                    // 初始化截图快捷键
-                    InitializeScreenshotHotkey();
+                    SubscribeToEvents();
 
-                    // 初始化默认插件状态检查器
-                    if (_defaultPluginChecker is not null)
-                    {
-                        _defaultPluginChecker.IsVPetLLMDefaultPlugin();
-                        // 如果设置窗口已经打开，刷新窗口标题
-                        _defaultPluginChecker.RefreshWindowTitle();
-                    }
+                    InitializeBubbleDelayControl();
+                    DetectAndHandleVPetTTSPlugin();
+                    InitializeRateLimiter();
 
-                    // 初始化动画协调器
-                    InitializeAnimationCoordinator();
+                    Logger.Log("LoadPlugin: Fully completed.");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"LoadPlugin async initialization failed: {ex.Message}");
+                    _logger.LogError("Failed to load plugin (async)", ex);
+                }
+            });
+        }
 
-                    // 初始化悬浮侧边栏
-                    InitializeFloatingSidebar();
+        private async Task InitializeUIComponentsAsync()
+        {
+            Logger.Log("InitializeUIComponentsAsync: Phase 1 - Critical UI (TalkBox + Menu)");
 
-                    Logger.Log("Dispatcher.Invoke finished.");
-                });
-
-                Logger.Log("LoadPlugin finished.");
-            }
-            catch (Exception ex)
+            await Application.Current.Dispatcher.InvokeAsync(() =>
             {
-                Logger.Log($"LoadPlugin failed: {ex.Message}");
-                _logger.LogError("Failed to load plugin", ex);
-            }
+                if (TalkBox is not null)
+                {
+                    MW.TalkAPI.Remove(TalkBox);
+                }
+                TalkBox = new UI.Windows.TalkBox(this);
+                MW.TalkAPI.Add(TalkBox);
+
+                var menuItem = new MenuItem()
+                {
+                    Header = "VPetLLM",
+                    HorizontalContentAlignment = HorizontalAlignment.Center,
+                };
+                menuItem.Click += (s, e) => this.Setting();
+                MW.Main.ToolBar.MenuMODConfig.Items.Add(menuItem);
+            });
+
+            Logger.Log("InitializeUIComponentsAsync: Phase 2 - Event handlers");
+
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                InitializeTouchInteractionHandler();
+                RegisterTakeItemHandleEvent();
+                RegisterItemUseHook();
+            });
+
+            Logger.Log("InitializeUIComponentsAsync: Phase 3 - Hotkeys");
+
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                InitializeVoiceInputHotkey();
+                InitializeScreenshotHotkey();
+            });
+
+            Logger.Log("InitializeUIComponentsAsync: Phase 4 - Secondary UI (deferred)");
+
+            await Application.Current.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() =>
+                {
+                    try
+                    {
+                        if (_defaultPluginChecker is not null)
+                        {
+                            _defaultPluginChecker.IsVPetLLMDefaultPlugin();
+                            _defaultPluginChecker.RefreshWindowTitle();
+                        }
+
+                        InitializeAnimationCoordinator();
+                        InitializeFloatingSidebar();
+
+                        Logger.Log("InitializeUIComponentsAsync: Phase 4 completed.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Log($"InitializeUIComponentsAsync Phase 4 failed: {ex.Message}");
+                    }
+                })).Task;
         }
 
         /// <summary>
@@ -1099,7 +1090,7 @@ namespace VPetLLM
 
         public override void Setting()
         {
-            Application.Current.Dispatcher.Invoke(() =>
+            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (SettingWindow is null || !SettingWindow.IsVisible)
                 {
@@ -1110,7 +1101,7 @@ namespace VPetLLM
                 {
                     SettingWindow.Activate();
                 }
-            });
+            }));
         }
 
         public void Dispose()
@@ -1464,7 +1455,7 @@ namespace VPetLLM
 
             Logger.Log($"Chat history already loaded by HistoryManager (SeparateChatByProvider={Settings.SeparateChatByProvider})");
 
-            Application.Current.Dispatcher.InvokeAsync(() =>
+            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (TalkBox is not null)
                 {
@@ -1476,7 +1467,7 @@ namespace VPetLLM
                 Logger.Log("New TalkBox added to TalkAPI");
 
                 Logger.Log($"New TalkBox should use ChatCore: {ChatCore?.GetType().Name}");
-            }).Wait();
+            }));
 
             _logger.LogInformation("ChatCore updated");
         }

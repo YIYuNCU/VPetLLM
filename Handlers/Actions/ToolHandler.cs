@@ -56,6 +56,13 @@ namespace VPetLLM.Handlers.Actions
                     if (tool is IActionPlugin actionPlugin)
                     {
                         var result = await actionPlugin.Function(arguments);
+
+                        if (!string.IsNullOrEmpty(result) && Utils.Common.XmlTagProcessor.ContainsXmlTags(result))
+                        {
+                            result = Utils.Common.XmlTagProcessor.FilterPluginResultXml(result);
+                            VPetLLM.Instance.Log($"ToolHandler: 工具结果XML已过滤: {result}");
+                        }
+
                         var formattedResult = $"[Tool Result: {toolName}] {result}";
                         VPetLLM.Instance.Log($"ToolHandler: Tool function returned: {result}, formatted: {formattedResult}");
 

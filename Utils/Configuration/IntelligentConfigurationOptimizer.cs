@@ -63,7 +63,8 @@ namespace VPetLLM.Utils.Configuration
 
             foreach (var property in properties)
             {
-                if (property.Name.StartsWith("_")) continue; // 跳过私有字段
+                if (property.Name.StartsWith("_")) continue;
+                if (property.GetIndexParameters().Length > 0) continue;
 
                 var currentValue = property.GetValue(_settings);
                 var propertyType = property.PropertyType;
@@ -177,10 +178,17 @@ namespace VPetLLM.Utils.Configuration
                 return;
             }
 
+            if (objType.IsGenericType && objType.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+            {
+                return;
+            }
+
             var properties = objType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
             foreach (var property in properties)
             {
+                if (property.GetIndexParameters().Length > 0) continue;
+
                 var currentValue = property.GetValue(obj);
                 var propertyType = property.PropertyType;
 

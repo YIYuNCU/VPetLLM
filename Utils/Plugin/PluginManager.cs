@@ -95,6 +95,20 @@ namespace VPetLLM.Utils.Plugin
                             if (plugin.Enabled)
                             {
                                 plugin.Initialize(VPetLLM.Instance);
+
+                                if (plugin is IXmlTagProvider xmlTagProvider)
+                                {
+                                    var tagRegs = xmlTagProvider.GetXmlTagRegistrations();
+                                    if (tagRegs is not null)
+                                    {
+                                        foreach (var reg in tagRegs)
+                                        {
+                                            reg.PluginName = plugin.Name;
+                                        }
+                                        Utils.Common.XmlTagProcessor.RegisterPluginTags(plugin.Name, tagRegs);
+                                    }
+                                }
+
                                 if (chatCore is not null)
                                 {
                                     var legacyPlugin = LegacyPlugin.PluginCompatibility.ToLegacy(plugin);
@@ -171,6 +185,9 @@ namespace VPetLLM.Utils.Plugin
                 chatCore.RemovePlugin(legacyPlugin);
             }
             plugin.Unload();
+
+            Utils.Common.XmlTagProcessor.UnregisterPluginTags(plugin.Name);
+
             Plugins.Remove(plugin);
 
             if (_pluginContexts.TryGetValue(filePath, out var context))
@@ -250,7 +267,8 @@ namespace VPetLLM.Utils.Plugin
             }
             Plugins.Clear();
 
-            // 卸载所有程序集上下�?
+            Utils.Common.XmlTagProcessor.UnregisterPluginTags("__all__");
+
             var contextList = _pluginContexts.Values.ToList();
             foreach (var context in contextList)
             {

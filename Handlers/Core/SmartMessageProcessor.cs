@@ -34,37 +34,36 @@ namespace VPetLLM.Handlers.Core
             var vpetAPI = new VPetAPIWrapper(plugin.MW, plugin);
             var animationCache = new AnimationCompatibilityCache(vpetAPI);
             
-            // 初始化 VPetTTS 集成管理器（统一管理所有 VPetTTS 相关功能）
             if (plugin.IsVPetTTSPluginDetected)
             {
                 _vpetTTSIntegration = new VPetTTSIntegrationManager(plugin);
                 Logger.Log("SmartMessageProcessor: VPetTTS 集成管理器已初始化");
             }
             
-            // 创建 TTSProviderFactory（传递集成管理器的协调器）
             var mpvPlayer = InitializeMpvPlayer();
             _ttsProviderFactory = new TTSProviderFactory(
                 vpetAPI,
-                null, // unifiedTTSDispatcher - 暂时为 null，将来可以注入
+                null,
                 mpvPlayer,
-                _vpetTTSIntegration // 传递集成管理器
+                _vpetTTSIntegration
             );
             
-            // 使用工厂创建 TTSIntegrationLayer
             var ttsLayer = new TTSIntegrationLayer(_ttsProviderFactory);
             
             _unifiedBubbleFacade = new UnifiedBubbleFacade(vpetAPI, animationCache, ttsLayer);
 
-            // 初始化动画兼容性缓存
-            try
+            _ = Task.Run(() =>
             {
-                animationCache.Initialize();
-                Logger.Log("SmartMessageProcessor: 动画兼容性缓存初始化完成");
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"SmartMessageProcessor: 动画兼容性缓存初始化失败: {ex.Message}");
-            }
+                try
+                {
+                    animationCache.Initialize();
+                    Logger.Log("SmartMessageProcessor: 动画兼容性缓存后台初始化完成");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"SmartMessageProcessor: 动画兼容性缓存后台初始化失败: {ex.Message}");
+                }
+            });
 
             _ttsSerializer = new TTSRequestSerializer();
 
@@ -235,6 +234,14 @@ namespace VPetLLM.Handlers.Core
 
                 // 通知TouchInteractionHandler开始执行VPetLLM动作
                 TouchInteractionHandler.NotifyVPetLLMActionStart();
+
+                // 预处理：处理XML格式标签并自动过滤未知标签
+                if (Utils.Common.XmlTagProcessor.ContainsXmlTags(response))
+                {
+                    Logger.Log("SmartMessageProcessor: 检测到XML格式标签，开始预处理...");
+                    response = Utils.Common.XmlTagProcessor.ProcessXmlTags(response);
+                    Logger.Log($"SmartMessageProcessor: XML标签处理完成，处理后长度: {response.Length}");
+                }
 
                 // 解析消息，提取文本片段和动作指令
                 var messageSegments = ParseMessage(response);

@@ -550,6 +550,18 @@ namespace VPetLLM.Handlers.Core
         {
             Logger.Log("StreamingCommandProcessor: Complete() 调用 - 统一流式处理完成");
 
+            // 预处理：处理XML格式标签并自动过滤未知标签
+            var currentText = _buffer.ToString();
+            if (Utils.Common.XmlTagProcessor.ContainsXmlTags(currentText))
+            {
+                Logger.Log("StreamingCommandProcessor: 检测到XML格式标签，开始预处理...");
+                var processedText = Utils.Common.XmlTagProcessor.ProcessXmlTags(currentText);
+                _buffer.Clear();
+                _buffer.Append(processedText);
+                _lastProcessedIndex = 0;
+                Logger.Log($"StreamingCommandProcessor: XML标签处理完成，处理后长度: {processedText.Length}");
+            }
+
             // 刷新批处理器
             if (_useBatching && _commandBatcher is not null)
             {

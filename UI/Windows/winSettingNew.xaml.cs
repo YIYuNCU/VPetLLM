@@ -7470,7 +7470,8 @@ namespace VPetLLM.UI.Windows
 
         private void ComboBox_Screenshot_ProcessingMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            // 获取当前选择的处理模式
+            if (!_isReadyToSave) return;
+
             var comboBox = sender as ComboBox;
             var selectedItem = comboBox?.SelectedItem as ComboBoxItem;
             var mode = selectedItem?.Tag?.ToString() ?? "NativeMultimodal";
@@ -7721,7 +7722,8 @@ namespace VPetLLM.UI.Windows
         {
             try
             {
-                // 确保 Screenshot 和其嵌套对象不为 null
+                if (!_isReadyToSave) return;
+
                 if (_plugin.Settings.Screenshot is null)
                 {
                     _plugin.Settings.Screenshot = new Configuration.ScreenshotSettings();
@@ -7796,7 +7798,8 @@ namespace VPetLLM.UI.Windows
         {
             try
             {
-                // 确保 Screenshot 和其嵌套对象不为 null
+                if (!_isReadyToSave) return;
+
                 if (_plugin.Settings.Screenshot is null)
                 {
                     _plugin.Settings.Screenshot = new Configuration.ScreenshotSettings();

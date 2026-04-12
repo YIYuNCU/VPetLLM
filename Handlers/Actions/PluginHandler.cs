@@ -93,12 +93,16 @@ namespace VPetLLM.Handlers.Actions
                     var result = await actionPlugin.Function(arguments);
                     VPetLLM.Instance.Log($"PluginHandler: Plugin function returned: {result}");
 
-                    // 只有当返回值非空时才回灌给 AI
                     if (!string.IsNullOrEmpty(result))
                     {
+                        if (Utils.Common.XmlTagProcessor.ContainsXmlTags(result))
+                        {
+                            result = Utils.Common.XmlTagProcessor.FilterPluginResultXml(result);
+                            VPetLLM.Instance.Log($"PluginHandler: 插件结果XML已过滤: {result}");
+                        }
+
                         var formattedResult = $"[Plugin Result: {pluginName}] {result}";
                         VPetLLM.Instance.Log($"PluginHandler: Formatted result: {formattedResult}");
-                        // 聚合到2秒窗口，统一回灌，避免连续触发LLM
                         ResultAggregator.Enqueue(formattedResult);
                     }
                     else

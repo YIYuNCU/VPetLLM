@@ -123,8 +123,6 @@ namespace VPetLLM.Core.Cache
                             {
                                 incompatibleCount++;
                             }
-
-                            Logger.Log($"AnimationCompatibilityCache: Animation '{animation}' - Supported: {isSupported}");
                         }
                         catch (Exception ex)
                         {
@@ -186,12 +184,8 @@ namespace VPetLLM.Core.Cache
                 // Check if we have a cached result
                 if (_compatibilityResults.TryGetValue(key, out var cachedResult))
                 {
-                    Logger.Log($"AnimationCompatibilityCache: Found cached result for '{animationName}': {cachedResult.IsSupported}");
                     return cachedResult.IsSupported;
                 }
-
-                // Animation not in cache, check it now and cache the result
-                Logger.Log($"AnimationCompatibilityCache: Animation '{animationName}' not in cache, checking now");
 
                 var currentMode = GetCurrentMode();
                 var isSupported = CheckAnimationCompatibility(animationName, currentMode);
@@ -207,7 +201,6 @@ namespace VPetLLM.Core.Cache
 
                 _compatibilityResults[key] = result;
 
-                Logger.Log($"AnimationCompatibilityCache: Checked and cached '{animationName}': {isSupported}");
                 return isSupported;
             }
             catch (Exception ex)

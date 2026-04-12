@@ -133,6 +133,12 @@ namespace VPetLLM.Utils.Common
 
                 if (!string.IsNullOrEmpty(aggregated) && VPetLLM.Instance?.ChatCore is not null)
                 {
+                    if (XmlTagProcessor.ContainsXmlTags(aggregated))
+                    {
+                        aggregated = XmlTagProcessor.FilterPluginResultXml(aggregated);
+                        VPetLLMUtils.Logger.Log($"ResultAggregator: 回灌内容XML已过滤");
+                    }
+
                     VPetLLMUtils.Logger.Log($"ResultAggregator: 向AI回灌聚合内容: {aggregated}");
 
                     // 开始活动会话，防止状态灯过早切换为Idle
