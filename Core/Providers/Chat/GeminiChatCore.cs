@@ -88,7 +88,7 @@ namespace VPetLLM.Core.Providers.Chat
 
             Logger.Log($"Gemini ChatWithImage: 发送多模态消息，图像大小: {imageData.Length} bytes");
 
-            List<Message> history = GetCoreHistory();
+            List<Message> history = await GetCoreHistoryAsync(userQuery: prompt);
 
             if (node.UseOpenAIAuth)
             {
@@ -236,6 +236,7 @@ namespace VPetLLM.Core.Providers.Chat
                 }
                 await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                 SaveHistory();
+                TriggerOverflowCheckAfterSuccess();
             }
             return "";
         }
@@ -367,6 +368,7 @@ namespace VPetLLM.Core.Providers.Chat
                 }
                 await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                 SaveHistory();
+                TriggerOverflowCheckAfterSuccess();
             }
             return "";
         }
@@ -375,6 +377,7 @@ namespace VPetLLM.Core.Providers.Chat
         {
             OnConversationTurn();
 
+
             if (!Settings.KeepContext)
             {
                 ClearContext();
@@ -382,7 +385,7 @@ namespace VPetLLM.Core.Providers.Chat
 
             var tempUserMessage = CreateUserMessage(prompt);
 
-            List<Message> history = GetCoreHistory();
+            List<Message> history = await GetCoreHistoryAsync(userQuery: prompt);
             if (tempUserMessage is not null)
             {
                 history.Add(tempUserMessage);
@@ -544,6 +547,7 @@ namespace VPetLLM.Core.Providers.Chat
                 }
                 await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                 SaveHistory();
+                TriggerOverflowCheckAfterSuccess();
             }
             return "";
         }
@@ -659,6 +663,7 @@ namespace VPetLLM.Core.Providers.Chat
                 }
                 await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                 SaveHistory();
+                TriggerOverflowCheckAfterSuccess();
             }
             return "";
         }
@@ -777,15 +782,10 @@ namespace VPetLLM.Core.Providers.Chat
             }
         }
 
-        private List<Message> GetCoreHistory(bool injectRecords = false)
+        private async Task<List<Message>> GetCoreHistoryAsync(bool injectRecords = false, string? userQuery = null)
         {
-            var history = new List<Message> { new Message { Role = "system", Content = GetSystemMessage() } };
-            history.AddRange(HistoryManager.GetHistory().Skip(Math.Max(0, HistoryManager.GetHistory().Count - _setting.HistoryCompressionThreshold)));
-            if (injectRecords)
-            {
-                history = InjectRecordsIntoHistory(history);
-            }
-            return history;
+            var result = await GetCoreHistoryCommonAsync(injectRecords, userQuery);
+            return CaptureOverflowCheckData(result);
         }
 
         public List<string> RefreshModels()

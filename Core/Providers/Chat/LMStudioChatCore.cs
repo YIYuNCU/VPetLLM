@@ -58,20 +58,10 @@ namespace VPetLLM.Core.Providers.Chat
             return Chat(prompt, false);
         }
 
-        private List<Message> GetCoreHistory(bool injectRecords = false)
+        private async Task<List<Message>> GetCoreHistoryAsync(bool injectRecords = false, string? userQuery = null)
         {
-            var history = new List<Message>
-            {
-                new Message { Role = "system", Content = GetSystemMessage() }
-            };
-            history.AddRange(HistoryManager.GetHistory().Skip(Math.Max(0, HistoryManager.GetHistory().Count - _setting.HistoryCompressionThreshold)));
-
-            if (injectRecords)
-            {
-                history = InjectRecordsIntoHistory(history);
-            }
-
-            return history;
+            var result = await GetCoreHistoryCommonAsync(injectRecords, userQuery);
+            return CaptureOverflowCheckData(result);
         }
 
         public override async Task<string> Chat(string prompt, bool isFunctionCall = false)
@@ -86,7 +76,7 @@ namespace VPetLLM.Core.Providers.Chat
                 }
 
                 var tempUserMessage = CreateUserMessage(prompt);
-                List<Message> history = GetCoreHistory();
+                List<Message> history = await GetCoreHistoryAsync(userQuery: prompt);
                 if (tempUserMessage is not null)
                 {
                     history.Add(tempUserMessage);
@@ -206,6 +196,7 @@ namespace VPetLLM.Core.Providers.Chat
                     }
                     await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                     SaveHistory();
+                    TriggerOverflowCheckAfterSuccess();
                 }
 
                 return "";
@@ -261,7 +252,7 @@ namespace VPetLLM.Core.Providers.Chat
                     new { type = "image_url", image_url = new { url = $"data:image/png;base64,{base64Image}" } }
                 };
 
-                List<Message> history = GetCoreHistory();
+                List<Message> history = await GetCoreHistoryAsync(userQuery: prompt);
                 var requestMessages = new List<object>();
                 foreach (var msg in history)
                 {
@@ -386,6 +377,7 @@ namespace VPetLLM.Core.Providers.Chat
                     }
                     await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                     SaveHistory();
+                    TriggerOverflowCheckAfterSuccess();
                 }
 
                 return "";

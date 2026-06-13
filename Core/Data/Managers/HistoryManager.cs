@@ -10,6 +10,7 @@ namespace VPetLLM.Core.Data.Managers
         private readonly ChatCoreBase _chatCore;
         private SystemMessageProvider _systemMessageProvider;
         private readonly ChatHistoryDatabase _database;
+        private OverflowManager? _overflowManager;
 
         public HistoryManager(Setting settings, string name, ChatCoreBase chatCore)
         {
@@ -28,6 +29,19 @@ namespace VPetLLM.Core.Data.Managers
         {
             _systemMessageProvider = provider;
         }
+
+        /// <summary>
+        /// Set the OverflowManager for overflow-mode context handling.
+        /// </summary>
+        public void SetOverflowManager(OverflowManager overflowManager)
+        {
+            _overflowManager = overflowManager;
+        }
+
+        /// <summary>
+        /// Get the OverflowManager (null if overflow mode is not enabled).
+        /// </summary>
+        public OverflowManager? GetOverflowManager() => _overflowManager;
 
         public List<Message> GetHistory() => _history;
 
@@ -71,7 +85,9 @@ namespace VPetLLM.Core.Data.Managers
 
         public async Task AddMessage(Message message)
         {
-            if (_settings.EnableHistoryCompression && ShouldCompress())
+            // Only use compression path in Compression mode; in Overflow mode we never compress
+            if (_settings.OverflowMode != Setting.ContextOverflowMode.Overflow
+                && _settings.EnableHistoryCompression && ShouldCompress())
             {
                 await CompressHistory();
             }
@@ -152,6 +168,9 @@ namespace VPetLLM.Core.Data.Managers
             {
                 Logger.Log($"清除数据库历史记录失败: {ex.Message}");
             }
+
+            // Clear overflow data too
+            _overflowManager?.ClearAll();
         }
 
         private async Task CompressHistory()

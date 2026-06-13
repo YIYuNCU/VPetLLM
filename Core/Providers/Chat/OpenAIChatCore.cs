@@ -223,7 +223,7 @@ namespace VPetLLM.Core.Providers.Chat
             };
 
             // 构建历史消息（不包含图像）
-            List<Message> history = GetCoreHistory();
+            List<Message> history = await GetCoreHistoryAsync(userQuery: prompt);
 
             // 构建请求消息列表
             var requestMessages = new List<object>();
@@ -358,6 +358,7 @@ namespace VPetLLM.Core.Providers.Chat
                 }
                 await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                 SaveHistory();
+                TriggerOverflowCheckAfterSuccess();
             }
 
             return "";
@@ -367,6 +368,7 @@ namespace VPetLLM.Core.Providers.Chat
         {
             // Handle conversation turn for record weight decrement
             OnConversationTurn();
+
 
             if (!Settings.KeepContext)
             {
@@ -403,7 +405,7 @@ namespace VPetLLM.Core.Providers.Chat
             }
 
             // 构建请求数据，根据启用开关决定是否包含高级参数
-            List<Message> history = GetCoreHistory();
+            List<Message> history = await GetCoreHistoryAsync(userQuery: prompt);
             // 如果有临时用户消息，添加到历史末尾用于API请求
             if (tempUserMessage is not null)
             {
@@ -556,6 +558,7 @@ namespace VPetLLM.Core.Providers.Chat
                 await HistoryManager.AddMessage(new Message { Role = "assistant", Content = message });
                 // 保存历史记录
                 SaveHistory();
+                TriggerOverflowCheckAfterSuccess();
             }
             return "";
         }
@@ -639,21 +642,10 @@ namespace VPetLLM.Core.Providers.Chat
             }
         }
 
-        private List<Message> GetCoreHistory(bool injectRecords = false)
+        private async Task<List<Message>> GetCoreHistoryAsync(bool injectRecords = false, string? userQuery = null)
         {
-            var history = new List<Message>
-            {
-                new Message { Role = "system", Content = GetSystemMessage() }
-            };
-            history.AddRange(HistoryManager.GetHistory().Skip(Math.Max(0, HistoryManager.GetHistory().Count - _setting.HistoryCompressionThreshold)));
-
-            // Inject important records into history (only when explicitly requested, after user message is added)
-            if (injectRecords)
-            {
-                history = InjectRecordsIntoHistory(history);
-            }
-
-            return history;
+            var result = await GetCoreHistoryCommonAsync(injectRecords, userQuery);
+            return CaptureOverflowCheckData(result);
         }
 
         public List<string> RefreshModels()

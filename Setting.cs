@@ -7,6 +7,7 @@ namespace VPetLLM
     public partial class Setting
     {
         public LLMType Provider { get; set; } = LLMType.Ollama;
+        public string LastSelectedChannelType { get; set; } = "OpenAI";
         public string Language { get; set; } = "zh-hans";
         public string PromptLanguage { get; set; } = "zh";
         public OllamaSetting Ollama { get; set; } = new OllamaSetting();
@@ -40,6 +41,12 @@ namespace VPetLLM
         public int CompressionRetainCount { get; set; } = 4;
         public bool EnableAIRetainCount { get; set; } = false;
         public bool EnableCompressionRecords { get; set; } = false;
+
+        // 上下文溢出模式（新机制：不压缩，溢出超出阈值的聊天内容）
+        public ContextOverflowMode OverflowMode { get; set; } = ContextOverflowMode.Overflow;
+        public bool EnableExpertMemoryRetrieval { get; set; } = false;
+        public int ExpertMemoryContextLength { get; set; } = 500;
+
         public bool EnablePlugin { get; set; } = true;
         public List<ToolSetting> Tools { get; set; } = new List<ToolSetting>();
         public bool ShowUninstallWarning { get; set; } = true;
@@ -73,6 +80,11 @@ namespace VPetLLM
         /// 是否启用降级功能
         /// </summary>
         public bool EnableFallback { get; set; } = false;
+
+        /// <summary>
+        /// 是否启用自动诊断（连续5次AI请求失败时自动运行）
+        /// </summary>
+        public bool EnableAutoDiagnostic { get; set; } = true;
 
         /// <summary>
         /// 降级提供商配置列表
@@ -1293,15 +1305,31 @@ namespace VPetLLM
             }
         }
 
-        public class FreeSetting
+        public class FreeNodeSetting
         {
+            public string Name { get; set; } = "Free";
             public string? Model { get; set; }
             public double Temperature { get; set; } = 0.7;
             public int MaxTokens { get; set; } = 2048;
             public bool EnableAdvanced { get; set; } = false;
             public bool EnableStreaming { get; set; } = false;
             public bool EnableVision { get; set; } = false;
+            public bool Enabled { get; set; } = true;
+            public ChannelMode Mode { get; set; } = ChannelMode.Unrestricted;
+        }
+
+        public class FreeSetting
+        {
+            public List<FreeNodeSetting> FreeNodes { get; set; } = new List<FreeNodeSetting>();
+            public int CurrentNodeIndex { get; set; } = 0;
             public bool EnableLoadBalancing { get; set; } = true;
+
+            public string? Model { get; set; }
+            public double Temperature { get; set; } = 0.7;
+            public int MaxTokens { get; set; } = 2048;
+            public bool EnableAdvanced { get; set; } = false;
+            public bool EnableStreaming { get; set; } = false;
+            public bool EnableVision { get; set; } = false;
         }
 
         public class LMStudioNodeSetting
@@ -1436,6 +1464,15 @@ namespace VPetLLM
             Both           // 两者任一达到阈值即触发
         }
 
+        /// <summary>
+        /// 上下文溢出模式
+        /// </summary>
+        public enum ContextOverflowMode
+        {
+            Compression,  // 有损压缩（旧机制，默认）
+            Overflow      // 溢出模式（新机制：不压缩，超出阈值的聊天内容挤出并总结为记忆点）
+        }
+
         public enum ChannelMode
         {
             Unrestricted = 0,      // 无限制（默认）
@@ -1460,7 +1497,7 @@ namespace VPetLLM
             {
                 ChannelMode.Unrestricted => true,
                 ChannelMode.ChatOnly => purpose == "Chat",
-                ChannelMode.CompressionOnly => purpose == "Compression",
+                ChannelMode.CompressionOnly => purpose == "Compression" || purpose == "Overflow",
                 ChannelMode.PluginDefined => !string.IsNullOrEmpty(pluginModeId) && purpose == pluginModeId,
                 _ => true
             };

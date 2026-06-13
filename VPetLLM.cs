@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using VPet_Simulator.Windows.Interface;
 using VPetLLM.Handlers.Animation;
 using VPetLLM.Infrastructure.Services.ApplicationServices;
+using VPetLLM.Services;
 using VPetLLM.UI.Windows;
 using VPetLLM.Utils.Audio;
 using VPetLLM.Utils.Configuration;
@@ -75,6 +76,18 @@ namespace VPetLLM
         /// TTS 服务（旧版）
         /// </summary>
         public TTSServiceType? TTSService;
+
+        private volatile bool _isTTSServiceUnavailable;
+
+        public bool IsTTSServiceUnavailable => _isTTSServiceUnavailable;
+
+        public event EventHandler<bool>? TTSServiceAvailabilityChanged;
+
+        private void OnTTSServiceAvailabilityChanged(object? sender, bool isUnavailable)
+        {
+            _isTTSServiceUnavailable = isUnavailable;
+            TTSServiceAvailabilityChanged?.Invoke(this, isUnavailable);
+        }
 
         /// <summary>
         /// 插件列表
@@ -163,6 +176,15 @@ namespace VPetLLM
 
         // 已注册 Hook 的物品类型列表
         private readonly string[] _hookedItemTypes = { "Food", "Toy", "Tool", "Mail", "Item" };
+
+        private int _consecutiveAIFailureCount = 0;
+        private readonly object _failureCountLock = new object();
+        private const int MAX_CONSECUTIVE_FAILURES = 5;
+
+        public int ConsecutiveAIFailureCount
+        {
+            get { lock (_failureCountLock) { return _consecutiveAIFailureCount; } }
+        }
 
         #endregion
 
@@ -438,6 +460,7 @@ namespace VPetLLM
 
                 // 保持旧版TTS服务用于兼容性，支持统一TTS注入
                 TTSService = new TTSServiceType(Settings.TTS, Settings.Proxy, unifiedDispatcher);
+                TTSService.ServiceAvailabilityChanged += OnTTSServiceAvailabilityChanged;
                 _logger.LogInformation("Legacy TTS service initialized with dependency injection support");
             }
             catch (Exception ex)
@@ -1436,13 +1459,197 @@ namespace VPetLLM
             {
                 PromptHelper.ReloadPrompts();
                 var response = await ChatCore.Chat(prompt);
+                RecordAISuccess();
                 return response;
             }
             catch (Exception ex)
             {
                 _logger.LogError("Failed to send chat message", ex);
+                RecordAIFailure();
                 return $"Error: {ex.Message}";
             }
+        }
+
+        public void RecordAISuccess()
+        {
+            lock (_failureCountLock)
+            {
+                if (_consecutiveAIFailureCount > 0)
+                {
+                    Logger.Log($"AI request succeeded, resetting consecutive failure count (was {_consecutiveAIFailureCount})");
+                }
+                _consecutiveAIFailureCount = 0;
+            }
+        }
+
+        public void RecordAIFailure()
+        {
+            int currentCount;
+            lock (_failureCountLock)
+            {
+                _consecutiveAIFailureCount++;
+                currentCount = _consecutiveAIFailureCount;
+            }
+
+            Logger.Log($"AI request failed. Consecutive failures: {currentCount}/{MAX_CONSECUTIVE_FAILURES}");
+
+            if (currentCount >= MAX_CONSECUTIVE_FAILURES)
+            {
+                if (!(Settings?.EnableAutoDiagnostic ?? true))
+                {
+                    Logger.Log($"Auto diagnostic is disabled. Skipping.");
+                    lock (_failureCountLock) { _consecutiveAIFailureCount = 0; }
+                    return;
+                }
+
+                Logger.Log($"Reached {MAX_CONSECUTIVE_FAILURES} consecutive failures, triggering diagnostic...");
+                Application.Current.Dispatcher.InvokeAsync(async () =>
+                {
+                    await RunDiagnosticAsync();
+                    lock (_failureCountLock)
+                    {
+                        _consecutiveAIFailureCount = 0;
+                    }
+                });
+            }
+        }
+
+        public async Task RunDiagnosticAsync()
+        {
+            try
+            {
+                var lang = Settings?.Language ?? "zh-hans";
+                var diagService = new Services.DiagnosticService(Settings, lang);
+
+                Logger.Log(lang.StartsWith("zh") ? "正在运行诊断..." : "Running diagnostics...");
+
+                var result = await diagService.RunFullDiagnosticAsync(status =>
+                {
+                    Logger.Log($"Diagnostic status: {status}");
+                });
+
+                var report = diagService.FormatDiagnosticReport(result);
+
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    var title = lang.StartsWith("zh") ? "运行诊断结果" : "Diagnostic Results";
+                    UI.Windows.winDiagnosticReport? diagWindow = null;
+                    diagWindow = new UI.Windows.winDiagnosticReport(
+                        title, result, report,
+                        lang.StartsWith("zh") ? "可选择测试LLM或应用推荐设置" : "You can test LLM or apply recommended settings",
+                        onTestLLM: async () =>
+                        {
+                            diagWindow!.ShowProgress(lang.StartsWith("zh") ? "正在测试各渠道 LLM 响应..." : "Testing channel LLM responses...");
+                            await TestAllChannelLLMsAsync(diagService, result, diagWindow, lang);
+                        },
+                        onApplyRecommendations: () =>
+                        {
+                            var recommendations = diagService.GenerateRecommendedSettings(result);
+                            if (recommendations.Count > 0)
+                            {
+                                diagWindow!.ShowRecommendations(recommendations, accepted =>
+                                {
+                                    if (accepted)
+                                    {
+                                        diagService.ApplyRecommendedSettings(recommendations);
+                                        diagWindow!.OnRecommendationsApplied();
+
+                                        var appliedMsg = lang.StartsWith("zh")
+                                            ? "已应用推荐设置。建议重启对话以使用新设置。"
+                                            : "Recommended settings applied. Restart conversation to use new settings.";
+                                        diagWindow!.UpdateFromResult(result,
+                                            diagService.FormatDiagnosticReport(result),
+                                            appliedMsg);
+                                    }
+                                });
+                            }
+                            else
+                            {
+                                var noAdjustTitle = lang.StartsWith("zh") ? "提示" : "Note";
+                                var noAdjustMsg = lang.StartsWith("zh")
+                                    ? "未发现需要调整的设置。"
+                                    : "No settings adjustments needed.";
+                                diagWindow!.ShowInfo(noAdjustTitle, noAdjustMsg);
+                            }
+                        },
+                        onOpenSettings: () =>
+                        {
+                            OpenSettingWindow();
+                        });
+                    diagWindow.ShowDialog();
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Diagnostic error: {ex.Message}");
+            }
+        }
+
+        private async Task TestAllChannelLLMsAsync(
+            Services.DiagnosticService diagService,
+            Services.DiagnosticResult result,
+            UI.Windows.winDiagnosticReport diagWindow,
+            string lang)
+        {
+            foreach (var cr in result.ChannelResults)
+            {
+                if (cr.ApiAvailable && !cr.LlmTested)
+                {
+                    var statusMsg = lang.StartsWith("zh")
+                        ? $"正在测试 {cr.ChannelType}: {cr.ChannelName}..."
+                        : $"Testing {cr.ChannelType}: {cr.ChannelName}...";
+                    Application.Current.Dispatcher.Invoke(() =>
+                        diagWindow.ShowProgress(statusMsg));
+
+                    await diagService.CheckChannelLLMAsync(cr);
+                }
+            }
+
+            var finalReport = diagService.FormatDiagnosticReport(result);
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                diagWindow.HideProgress();
+                diagWindow.UpdateTitle(
+                    lang.StartsWith("zh") ? "诊断报告 - 含LLM测试" : "Diagnostic Report - With LLM Tests");
+                diagWindow.UpdateFromResult(result,
+                    diagService.FormatDiagnosticReport(result),
+                    lang.StartsWith("zh") ? "LLM 测试完成" : "LLM test complete");
+
+                var recommendations = diagService.GenerateRecommendedSettings(result);
+                if (recommendations.Count > 0)
+                {
+                    diagWindow.ShowRecommendations(recommendations, accepted =>
+                    {
+                        if (accepted)
+                        {
+                            diagService.ApplyRecommendedSettings(recommendations);
+                            diagWindow.OnRecommendationsApplied();
+
+                            var appliedMsg = lang.StartsWith("zh")
+                                ? "已应用推荐设置。建议重启对话。"
+                                : "Recommended settings applied. Restart conversation.";
+                            diagWindow.UpdateFromResult(result,
+                                diagService.FormatDiagnosticReport(result),
+                                appliedMsg);
+                        }
+                    });
+                }
+            });
+        }
+
+        public void OpenSettingWindow()
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (SettingWindow is null || !SettingWindow.IsLoaded)
+                {
+                    SettingWindow = new UI.Windows.winSettingNew(this);
+                }
+                SettingWindow.Show();
+                SettingWindow.Activate();
+                SettingWindow.Focus();
+            });
         }
 
         /// <summary>

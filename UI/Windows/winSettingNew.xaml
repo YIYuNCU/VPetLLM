@@ -18,6 +18,8 @@
                 <ResourceDictionary Source="../Styles/Controls.xaml"/>
             </ResourceDictionary.MergedDictionaries>
             <converters:BoolInverter x:Key="BoolInverter"/>
+            <converters:LogTimestampConverter x:Key="LogTimestampConverter"/>
+            <converters:LogMessageConverter x:Key="LogMessageConverter"/>
 
             <!-- 现代化TabControl样式 -->
             <Style x:Key="ModernTabControl" TargetType="TabControl">
@@ -409,6 +411,7 @@
                 <ComboBoxItem Content="Gemini" Tag="Gemini"/>
                 <ComboBoxItem Content="Ollama" Tag="Ollama"/>
                 <ComboBoxItem Content="LMStudio" Tag="LMStudio"/>
+                <ComboBoxItem Content="Free" Tag="Free"/>
             </ComboBox>
             <CheckBox x:Name="CheckBox_EnableLoadBalancing"
                     Content="{utils:Localize KeyPath=LLM_Settings.EnableLoadBalancing}"
@@ -844,6 +847,13 @@
                                                 Foreground="{StaticResource SecondaryTextBrush}"
                                                 FontSize="14"/>
                                             </StackPanel>
+
+                                            <TextBlock x:Name="TextBlock_TTS_ServiceUnavailable"
+                                                Visibility="Collapsed"
+                                                Foreground="#FFD44444"
+                                                FontSize="12"
+                                                Margin="0,0,0,8"
+                                                TextWrapping="Wrap"/>
 
                                             <WrapPanel HorizontalAlignment="Right" Margin="0,0,0,0">
                                                 <Button x:Name="Button_TTS_Test"
@@ -2168,10 +2178,22 @@
                                         </ToolTip>
                                     </CheckBox.ToolTip>
                                 </CheckBox>
-                                <CheckBox x:Name="CheckBox_EnableHistoryCompression"
-                                        Content="{utils:Localize KeyPath=Advanced_Options.EnableHistoryCompression}"
-                                        Margin="0,0,0,12"
-                                        Style="{StaticResource ModernCheckBox}"/>
+                                <!-- 上下文模式选择（压缩模式 vs 长上下文模式）-->
+                                <StackPanel Orientation="Horizontal"
+                                        Margin="0,0,0,12">
+                                    <TextBlock Text="{utils:Localize KeyPath=Advanced_Options.ContextMode, Default=上下文模式:}"
+                                            VerticalAlignment="Center"
+                                            x:Name="TextBlock_ContextMode"
+                                            Foreground="{StaticResource PrimaryTextBrush}"
+                                            FontSize="14"
+                                            Width="80"/>
+                                    <ComboBox x:Name="ComboBox_ContextMode"
+                                            Width="220"
+                                            Style="{StaticResource ModernComboBox}">
+                                        <ComboBoxItem Content="{utils:Localize KeyPath=Advanced_Options.ContextMode_Overflow, Default=长上下文模式（推荐）}" Tag="Overflow"/>
+                                        <ComboBoxItem Content="{utils:Localize KeyPath=Advanced_Options.ContextMode_Compression, Default=聊天压缩模式（有损）}" Tag="Compression"/>
+                                    </ComboBox>
+                                </StackPanel>
                                 <!-- 压缩触发模式 -->
                                 <StackPanel Orientation="Horizontal"
                                         Margin="20,0,0,12">
@@ -2214,11 +2236,17 @@
                                             VerticalAlignment="Center"
                                             Foreground="{StaticResource SecondaryTextBrush}"
                                             FontSize="14"/>
+                                    <TextBlock x:Name="TextBlock_OverflowMessageCount"
+                                            VerticalAlignment="Center"
+                                            Foreground="{StaticResource WarningBrush}"
+                                            FontSize="12"
+                                            Margin="10,0,0,0"/>
                                 </StackPanel>
 
                                 <!-- Token数量阈值-->
                                 <StackPanel Orientation="Horizontal"
-                                        Margin="20,0,0,0">
+                                        Margin="20,0,0,0"
+                                        x:Name="Panel_HistoryCompressionTokenThreshold">
                                     <TextBlock Text="{utils:Localize KeyPath=Advanced_Options.HistoryCompressionTokenThreshold}"
                                             VerticalAlignment="Center"
                                             x:Name="TextBlock_HistoryCompressionTokenThreshold"
@@ -2239,11 +2267,17 @@
                                             VerticalAlignment="Center"
                                             Foreground="{StaticResource SecondaryTextBrush}"
                                             FontSize="14"/>
+                                    <TextBlock x:Name="TextBlock_OverflowTokenCount"
+                                            VerticalAlignment="Center"
+                                            Foreground="{StaticResource WarningBrush}"
+                                            FontSize="12"
+                                            Margin="10,0,0,0"/>
                                 </StackPanel>
 
-                                <!-- 总结后保留对话消息数 -->
+                                <!-- 总结后保留对话消息数（仅压缩模式有效） -->
                                 <StackPanel Orientation="Horizontal"
-                                        Margin="20,12,0,12">
+                                        Margin="20,12,0,12"
+                                        x:Name="Panel_CompressionRetainCount">
                                     <TextBlock Text="{utils:Localize KeyPath=Advanced_Options.CompressionRetainCount}"
                                             VerticalAlignment="Center"
                                             x:Name="TextBlock_CompressionRetainCount"
@@ -2281,6 +2315,27 @@
                                         </CheckBox.ToolTip>
                                     </CheckBox>
                                 </StackPanel>
+
+                                <!-- ===== 长上下文模式设置 ===== -->
+
+                                <!-- 专家模型检索上下文长度（仅长上下文模式有效） -->
+                                <StackPanel Orientation="Horizontal"
+                                        Margin="20,0,0,12"
+                                        x:Name="Panel_ExpertMemoryContextLength">
+                                    <TextBlock Text="{utils:Localize KeyPath=Advanced_Options.ExpertMemoryContextLength, Default=专家检索上下文长度:}"
+                                            VerticalAlignment="Center"
+                                            x:Name="TextBlock_ExpertMemoryContextLength"
+                                            Foreground="{StaticResource PrimaryTextBrush}"
+                                            FontSize="14"
+                                            Width="140"/>
+                                    <TextBox x:Name="TextBox_ExpertMemoryContextLength"
+                                            Width="152"
+                                            Margin="10,0"
+                                            Style="{StaticResource ModernTextBox}"/>
+                                </StackPanel>
+
+                                <!-- 注意：Prompt Token 预算使用下方"消息Token阈值"控制 -->
+                                <!-- 注意：选择长上下文模式时自动启用专家模型记忆检索 -->
                             </StackPanel>
 
                             <!-- 强化记忆高级设置 -->
@@ -2344,6 +2399,44 @@
                                         Margin="10,0,0,0"
                                         Foreground="{StaticResource SecondaryTextBrush}"
                                         FontSize="14"/>
+                            </StackPanel>
+
+                            <!-- 运行诊断 -->
+                            <Separator Margin="0,20,0,20"
+                                     Background="{StaticResource BorderBrush}"
+                                     Height="1"/>
+                            <TextBlock Name="TextBlock_DiagnosticTitle"
+                                     Text="{utils:Localize KeyPath=Advanced_Options.DiagnosticTitle, Default=运行诊断}"
+                                     FontSize="16"
+                                     FontWeight="SemiBold"
+                                     Margin="0,0,0,12"
+                                     Foreground="{StaticResource PrimaryTextBrush}"/>
+                            <TextBlock Name="TextBlock_DiagnosticDesc"
+                                     Text="{utils:Localize KeyPath=Advanced_Options.DiagnosticDesc, Default=检查网络连接、代理可用性及 API 接口状态，帮助快速定位连接问题。连续5次AI请求失败时也会自动运行。}"
+                                     Foreground="{StaticResource SecondaryTextBrush}"
+                                     FontSize="12"
+                                     TextWrapping="Wrap"
+                                     Margin="0,0,0,12"/>
+                            <Button x:Name="Button_RunDiagnostic"
+                                    Content="{utils:Localize KeyPath=Advanced_Options.RunDiagnostic, Default=运行诊断}"
+                                    Width="150"
+                                    Height="36"
+                                    Margin="0,0,0,12"
+                                    Click="Button_RunDiagnostic_Click"
+                                    Style="{StaticResource PrimaryButton}"/>
+                            <CheckBox x:Name="CheckBox_EnableAutoDiagnostic"
+                                      Content="{utils:Localize KeyPath=Advanced_Options.EnableAutoDiagnostic, Default=启用自动诊断（连续5次AI请求失败时自动运行）}"
+                                      IsChecked="True"
+                                      Margin="0,0,0,12"
+                                      Checked="CheckBox_EnableAutoDiagnostic_Changed"
+                                      Unchecked="CheckBox_EnableAutoDiagnostic_Changed"
+                                      Style="{StaticResource ModernCheckBox}"/>
+                            <StackPanel x:Name="StackPanel_DiagnosticProgress" Visibility="Collapsed" Margin="0,0,0,16">
+                                <TextBlock x:Name="TextBlock_DiagnosticStatus"
+                                         Foreground="{StaticResource PrimaryTextBrush}"
+                                         FontSize="14"
+                                         TextWrapping="Wrap"
+                                         Margin="0,0,0,8"/>
                             </StackPanel>
 
                             <!-- 身体交互设置 -->
@@ -2633,51 +2726,127 @@
                     x:Name="Tab_Log"
                     Style="{StaticResource ModernTabItem}">
                 <Border Style="{StaticResource CardContainer}">
-                    <DockPanel>
-                        <StackPanel DockPanel.Dock="Top"
-                                Orientation="Horizontal"
-                                HorizontalAlignment="Left"
-                                Margin="0,0,0,16">
-                            <CheckBox x:Name="CheckBox_LogAutoScroll"
-                                    Content="{utils:Localize KeyPath=Log.AutoScroll}"
-                                    Margin="0,0,20,0"
-                                    Style="{StaticResource ModernCheckBox}"/>
-                            <TextBlock Text="{utils:Localize KeyPath=Log.MaxLogCount}"
-                                    VerticalAlignment="Center"
-                                    Margin="0,0,8,0"
-                                    x:Name="TextBlock_MaxLogCount"
-                                    Foreground="{StaticResource PrimaryTextBrush}"
-                                    FontSize="14"/>
-                            <TextBox x:Name="TextBox_MaxLogCount"
-                                    Width="185"
-                                    VerticalAlignment="Center"
-                                    Style="{StaticResource ModernTextBox}"/>
-                        </StackPanel>
-                        <StackPanel DockPanel.Dock="Bottom"
-                                Orientation="Horizontal"
-                                HorizontalAlignment="Right"
-                                Margin="0,16,0,0">
-                            <Button x:Name="Button_CopyLog"
-                                    Content="{utils:Localize KeyPath=Log.Copy}"
-                                    Click="Button_CopyLog_Click"
-                                    Margin="0,0,8,0"
-                                    Style="{StaticResource SecondaryButton}"/>
-                            <Button x:Name="Button_ClearLog"
-                                    Content="{utils:Localize KeyPath=Log.Clear}"
-                                    Click="Button_ClearLog_Click"
-                                    Style="{StaticResource SecondaryButton}"/>
-                        </StackPanel>
-                        <ListBox x:Name="LogBox"
-                                MinHeight="200"
-                                Background="{StaticResource BackgroundBrush}"
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Background="{StaticResource ControlBackgroundBrush}"
                                 BorderBrush="{StaticResource BorderBrush}"
                                 BorderThickness="1"
-                                VirtualizingStackPanel.IsVirtualizing="True"
-                                VirtualizingStackPanel.VirtualizationMode="Recycling"
-                                ScrollViewer.CanContentScroll="True"
-                                ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                ScrollViewer.VerticalScrollBarVisibility="Auto"/>
-                    </DockPanel>
+                                CornerRadius="6"
+                                Padding="16,12"
+                                Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="TextBlock_LogManagement"
+                                            Text="{utils:Localize KeyPath=Log.Tab}"
+                                            FontSize="16"
+                                            FontWeight="SemiBold"
+                                            Foreground="{StaticResource PrimaryTextBrush}"
+                                            Margin="0,0,0,2"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1"
+                                           Orientation="Horizontal"
+                                           VerticalAlignment="Center">
+                                    <Button x:Name="Button_CopyLog"
+                                            Content="{utils:Localize KeyPath=Log.Copy}"
+                                            Margin="0,0,8,0"
+                                            Padding="12,6"
+                                            Click="Button_CopyLog_Click"
+                                            Style="{StaticResource SecondaryButton}"/>
+                                    <Button x:Name="Button_ClearLog"
+                                            Content="{utils:Localize KeyPath=Log.Clear}"
+                                            Padding="12,6"
+                                            Click="Button_ClearLog_Click"
+                                            Style="{StaticResource SecondaryButton}"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row="1" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBox x:Name="TextBox_LogSearch"
+                                    Grid.Column="0"
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource ModernTextBox}"
+                                    TextChanged="TextBox_LogSearch_TextChanged" Margin="0,0,45,0"/>
+                            <CheckBox x:Name="CheckBox_LogAutoScroll"
+                                    Grid.Column="1"
+                                    Content="{utils:Localize KeyPath=Log.AutoScroll}"
+                                    Margin="16,0,10,0"
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource ModernCheckBox}"/>
+                            <StackPanel Grid.Column="2"
+                                       Orientation="Horizontal"
+                                       Margin="16,0,0,0"
+                                       VerticalAlignment="Center">
+                                <TextBlock Text="{utils:Localize KeyPath=Log.MaxLogCount}"
+                                        VerticalAlignment="Center"
+                                        x:Name="TextBlock_MaxLogCount"
+                                        Foreground="{StaticResource PrimaryTextBrush}"
+                                        FontSize="14"/>
+                                <TextBox x:Name="TextBox_MaxLogCount"
+                                        Width="144"
+                                        Margin="8,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource ModernTextBox}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Border Grid.Row="2"
+                                Background="{StaticResource ControlBackgroundBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6">
+                            <ListBox x:Name="LogBox"
+                                    MinHeight="200"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    VirtualizingStackPanel.IsVirtualizing="True"
+                                    VirtualizingStackPanel.VirtualizationMode="Recycling"
+                                    ScrollViewer.CanContentScroll="True"
+                                    ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                    ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="4,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0"
+                                                      Foreground="{StaticResource SecondaryTextBrush}"
+                                                      FontSize="12"
+                                                      FontFamily="Consolas, Courier New"
+                                                      VerticalAlignment="Top"
+                                                      Margin="0,0,12,0"
+                                                      Text="{Binding Converter={StaticResource LogTimestampConverter}}"/>
+                                            <TextBlock Grid.Column="1"
+                                                      Foreground="{StaticResource PrimaryTextBrush}"
+                                                      FontSize="13"
+                                                      TextWrapping="Wrap"
+                                                      VerticalAlignment="Top"
+                                                      Text="{Binding Converter={StaticResource LogMessageConverter}}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Border>
+                    </Grid>
                 </Border>
             </TabItem>
             <TabItem Header="{utils:Localize KeyPath=Plugin.Tab}"
@@ -2963,6 +3132,217 @@
                                                         </Button.Style>
                                                     </Button>
 
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Border>
+                    </Grid>
+                </Border>
+            </TabItem>
+            <TabItem Header="{utils:Localize KeyPath=Skills.Tab}"
+                    x:Name="Tab_Skills"
+                    Style="{StaticResource ModernTabItem}">
+                <Border Style="{StaticResource CardContainer}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Skills management header -->
+                        <Border Background="{StaticResource ControlBackgroundBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="16,12"
+                                Margin="0,0,0,16">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="TextBlock_SkillsManagement"
+                                            Text="{utils:Localize KeyPath=Skills.Management}"
+                                            FontSize="16"
+                                            FontWeight="SemiBold"
+                                            Foreground="{StaticResource PrimaryTextBrush}"
+                                            Margin="0,0,0,2"/>
+                                    <TextBlock x:Name="TextBlock_SkillsManagementDescription"
+                                            Text="{utils:Localize KeyPath=Skills.ManagementDescription}"
+                                            Foreground="{StaticResource SecondaryTextBrush}"
+                                            FontSize="12"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="1" 
+                                           Orientation="Horizontal" 
+                                           VerticalAlignment="Center">
+                                    <Button x:Name="Button_SkillsRefresh"
+                                            Content="{utils:Localize KeyPath=Skills.Refresh}"
+                                            Margin="0,0,8,0"
+                                            Padding="12,6"
+                                            Click="Button_SkillsRefresh_Click"
+                                            Style="{StaticResource SecondaryButton}"/>
+                                    <Button x:Name="Button_SkillsImport"
+                                            Content="{utils:Localize KeyPath=Skills.Import}"
+                                            Padding="12,6"
+                                            Click="Button_SkillsImport_Click"
+                                            Style="{StaticResource SecondaryButton}"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- Skills list -->
+                        <Border Background="{StaticResource ControlBackgroundBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Grid.Row="1">
+                            <DataGrid x:Name="DataGrid_Skills"
+                                    AutoGenerateColumns="False"
+                                    CanUserAddRows="False"
+                                    RowHeight="52"
+                                    GridLinesVisibility="Horizontal"
+                                    HeadersVisibility="Column"
+                                    AlternatingRowBackground="{StaticResource SecondaryBrush}"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Style="{StaticResource ModernDataGrid}"
+                                    ColumnHeaderStyle="{StaticResource ModernDataGridColumnHeader}"
+                                    HorizontalGridLinesBrush="{StaticResource BorderBrush}"
+                                    SelectionMode="Single"
+                                    SelectionUnit="FullRow"
+                                    IsReadOnly="True">
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="{utils:Localize KeyPath=Skills.Enabled}" Width="50">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}"
+                                                         HorizontalAlignment="Center"
+                                                         VerticalAlignment="Center"
+                                                         IsHitTestVisible="False"
+                                                         Focusable="False"
+                                                         Style="{StaticResource ModernCheckBox}"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                        <DataGridTemplateColumn.HeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource ModernDataGridColumnHeader}">
+                                                <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                                            </Style>
+                                        </DataGridTemplateColumn.HeaderStyle>
+                                    </DataGridTemplateColumn>
+
+                                    <DataGridTextColumn Header="{utils:Localize KeyPath=Skills.Name}"
+                                    Binding="{Binding Name}"
+                                    Width="130"
+                                    MinWidth="100">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Padding" Value="8,4"/>
+                                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                                <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}"/>
+                                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+
+                                    <DataGridTextColumn Header="{utils:Localize KeyPath=Skills.Description}"
+                                    Binding="{Binding Description}"
+                                    Width="200"
+                                    MinWidth="140">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Padding" Value="8,4"/>
+                                                <Setter Property="TextWrapping" Value="Wrap"/>
+                                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                                <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}"/>
+                                                <Setter Property="LineHeight" Value="16"/>
+                                                <Setter Property="MaxHeight" Value="40"/>
+                                                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                                <Setter Property="ToolTip" Value="{Binding Description}"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+
+                                    <DataGridTextColumn Header="{utils:Localize KeyPath=Skills.Trigger}"
+                                    Binding="{Binding TriggerHint}"
+                                    Width="160"
+                                    MinWidth="120">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Padding" Value="8,4"/>
+                                                <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}"/>
+                                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                                <Setter Property="ToolTip" Value="{Binding TriggerHint}"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+
+                                    <DataGridTextColumn Header="{utils:Localize KeyPath=Skills.UseCount}"
+                                    Binding="{Binding UseCount}"
+                                    Width="60">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Padding" Value="8,4"/>
+                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                                <Setter Property="HorizontalAlignment" Value="Center"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+
+                                    <DataGridTextColumn Header="{utils:Localize KeyPath=Skills.LastUsed}"
+                                    Binding="{Binding LastUsed, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
+                                    Width="140"
+                                    MinWidth="120">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Padding" Value="8,4"/>
+                                                <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}"/>
+                                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                                <Setter Property="FontSize" Value="11"/>
+                                            </Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+
+                                    <DataGridTemplateColumn Header="{utils:Localize KeyPath=Plugin.Action}" Width="*" MinWidth="180">
+                                        <DataGridTemplateColumn.HeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource ModernDataGridColumnHeader}">
+                                                <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                                            </Style>
+                                        </DataGridTemplateColumn.HeaderStyle>
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal" 
+                                                           Margin="8,4"
+                                                           HorizontalAlignment="Left"
+                                                           VerticalAlignment="Center">
+                                                    <Button Content="{utils:Localize KeyPath=Skills.Export}"
+                                                            Click="Button_SkillRowExport_Click" 
+                                                            Padding="6,3"
+                                                            Margin="0,0,4,0"
+                                                            FontSize="11"
+                                                            ToolTip="{utils:Localize KeyPath=Skills.Export}"
+                                                            Style="{StaticResource SecondaryButton}"/>
+                                                    <Button Content="{utils:Localize KeyPath=Skills.Delete}"
+                                                            Click="Button_SkillRowDelete_Click" 
+                                                            Padding="6,3"
+                                                            Margin="0,0,4,0"
+                                                            FontSize="11"
+                                                            ToolTip="{utils:Localize KeyPath=Skills.Delete}"
+                                                            Style="{StaticResource SecondaryButton}"/>
+                                                    <Button Content="{utils:Localize KeyPath=Skills.View}"
+                                                            Click="Button_SkillRowView_Click" 
+                                                            Padding="6,3"
+                                                            FontSize="11"
+                                                            ToolTip="{utils:Localize KeyPath=Skills.View}"
+                                                            Style="{StaticResource SecondaryButton}"/>
                                                 </StackPanel>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>

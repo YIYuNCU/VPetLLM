@@ -1,6 +1,7 @@
+using VPet_Simulator.Windows.Interface;
 using System.Net;
 using System.Net.Http;
-using VPet_Simulator.Windows.Interface;
+using VPetLLM.Core.Data.Managers;
 
 namespace VPetLLM.Core.Abstractions.Base
 {
@@ -9,11 +10,17 @@ namespace VPetLLM.Core.Abstractions.Base
         public abstract string Name { get; }
         public HistoryManager HistoryManager { get; }
         public RecordManager RecordManager { get; }
+        public SkillManager SkillManager { get; }
+        public OverflowManager? OverflowManager { get; private set; }
         protected Setting? Settings { get; }
         protected IMainWindow? MainWindow { get; }
         protected ActionProcessor? ActionProcessor { get; }
         protected SystemMessageProvider SystemMessageProvider { get; }
         protected ContextFilter ContextFilter { get; }
+
+        // 溢出检查缓存数据 — 在各 Provider API 成功时触发，而非 GetCoreHistoryCommonAsync 中火抛
+        protected List<Message>? _pendingOverflowHistory;
+        protected int _pendingOverflowSnapshotCount;
         protected Action<string> ResponseHandler;
         protected Action<string> StreamingChunkHandler;
         public abstract Task<string> Chat(string prompt);
@@ -85,20 +92,34 @@ namespace VPetLLM.Core.Abstractions.Base
         }
 
         /// <summary>
-        /// Inject important records into message history before sending to LLM
+        /// Inject important records and skills into message history before sending to LLM
         /// </summary>
         protected List<Message> InjectRecordsIntoHistory(List<Message> history)
         {
             try
             {
+                // Inject records if enabled
                 if (RecordManager is not null && Settings?.Records?.EnableRecords == true)
                 {
-                    return RecordManager.InjectRecordsIntoHistory(history);
+                    history = RecordManager.InjectRecordsIntoHistory(history);
                 }
             }
             catch (Exception ex)
             {
                 Logger.Log($"Error injecting records into history: {ex.Message}");
+            }
+
+            try
+            {
+                // Inject skills context if SkillManager is available
+                if (SkillManager is not null)
+                {
+                    history = SkillManager.InjectSkillsIntoHistory(history);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Error injecting skills into history: {ex.Message}");
             }
 
             return history;
@@ -129,9 +150,160 @@ namespace VPetLLM.Core.Abstractions.Base
             catch (Exception ex)
             {
                 Logger.Log($"Failed to initialize RecordManager: {ex.Message}");
-                // Create a dummy RecordManager to prevent null reference errors
                 RecordManager = null;
             }
+
+            // Initialize SkillManager
+            try
+            {
+                SkillManager = new SkillManager(Name);
+                Logger.Log($"SkillManager initialized for {Name}");
+
+                // Register SkillManager with ActionProcessor
+                if (actionProcessor is not null)
+                {
+                    actionProcessor.SetSkillManager(SkillManager);
+                }
+
+                // Register SkillManager with SystemMessageProvider
+                if (SystemMessageProvider is not null)
+                {
+                    SystemMessageProvider.SkillManager = SkillManager;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed to initialize SkillManager: {ex.Message}");
+                SkillManager = null;
+            }
+
+            // Initialize OverflowManager (always created; activates only in Overflow mode)
+            try
+            {
+                OverflowManager = new OverflowManager(settings, Name, this, RecordManager);
+                HistoryManager.SetOverflowManager(OverflowManager);
+                Logger.Log($"OverflowManager initialized for {Name} (active={settings?.OverflowMode == Setting.ContextOverflowMode.Overflow})");
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed to initialize OverflowManager: {ex.Message}");
+                OverflowManager = null;
+            }
+
+            // Initialize MemoryRetrievalService (always created; activates only when enabled)
+            try
+            {
+                var retrievalService = new MemoryRetrievalService(
+                    settings, this, HistoryManager, OverflowManager, RecordManager);
+
+                // Register MemoryRetrievalService with ActionProcessor for the retrieval tool handler
+                if (actionProcessor is not null)
+                {
+                    actionProcessor.SetMemoryRetrievalService(retrievalService);
+                }
+
+                Logger.Log($"MemoryRetrievalService initialized for {Name} (active={settings?.EnableExpertMemoryRetrieval == true})");
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Failed to initialize MemoryRetrievalService: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Result of GetCoreHistoryCommonAsync.
+        /// </summary>
+        protected class CoreHistoryResult
+        {
+            public List<Message> History { get; set; } = new();
+            /// <summary>
+            /// Snapshot of full history for later overflow check. Set only in Overflow mode.
+            /// Consumer (Provider) should call OverflowManager after successful API round.
+            /// </summary>
+            public List<Message>? OverflowCheckHistory { get; set; }
+            public int OverflowCheckSnapshotCount { get; set; }
+        }
+
+        /// <summary>
+        /// 从 CoreHistoryResult 中捕获溢出检查数据，供 API 成功后触发。
+        /// 各 Provider 在 GetCoreHistoryAsync 中调用此方法代替直接返回 result.History。
+        /// </summary>
+        protected List<Message> CaptureOverflowCheckData(CoreHistoryResult result)
+        {
+            _pendingOverflowHistory = result.OverflowCheckHistory;
+            _pendingOverflowSnapshotCount = result.OverflowCheckSnapshotCount;
+            return result.History;
+        }
+
+        /// <summary>
+        /// 在 API 调用成功且历史已保存后触发溢出检查。
+        /// 替代旧的火抛方式（在 GetCoreHistoryCommonAsync 中 fire-and-forget），
+        /// 确保只在 Chat 请求真正成功时才触发，避免失败重试时重复浪费。
+        /// </summary>
+        protected void TriggerOverflowCheckAfterSuccess()
+        {
+            if (OverflowManager is not null && _pendingOverflowHistory is not null)
+            {
+                OverflowManager.TriggerCheck(_pendingOverflowHistory, _pendingOverflowSnapshotCount);
+                _pendingOverflowHistory = null;
+            }
+        }
+
+        /// <summary>
+        /// Builds the core history list for prompt construction.
+        /// In overflow mode, uses a sliding window based on token limit.
+        /// In compression mode, uses the legacy truncation approach.
+        /// </summary>
+        /// <param name="injectRecords">Whether to inject important records into the history.</param>
+        /// <param name="userQuery">Optional user query for triggering memory retrieval.</param>
+        protected async Task<CoreHistoryResult> GetCoreHistoryCommonAsync(bool injectRecords, string? userQuery = null)
+        {
+            var result = new CoreHistoryResult();
+
+            // 记忆检索已移至 Tool/Handler 机制 (<|retrieve_memories_begin|> query <|retrieve_memories_end|>)
+            // 由 AI 主动决定何时需要检索，不再自动匹配注入
+
+            var history = new List<Message>
+            {
+                new Message { Role = "system", Content = GetSystemMessage() }
+            };
+
+            if (Settings?.OverflowMode == Setting.ContextOverflowMode.Overflow)
+            {
+                // Overflow mode: include ALL history, inject summary if exists
+                var fullHistory = HistoryManager.GetHistory();
+
+                // Inject overflow summary as a system message if it exists
+                if (OverflowManager?.LatestSummary is string summary && summary.Length > 0)
+                {
+                    history.Add(new Message
+                    {
+                        Role = "system",
+                        Content = $"[Previous Conversation Summary]\n{summary}\n[/Previous Conversation Summary]"
+                    });
+                }
+
+                history.AddRange(fullHistory);
+
+                // 记录快照用于后续溢出检查（由各 Provider 在 API 成功后显式触发）
+                result.OverflowCheckHistory = fullHistory;
+                result.OverflowCheckSnapshotCount = fullHistory.Count;
+            }
+            else
+            {
+                // Compression/legacy mode: use naive truncation
+                var threshold = Settings?.HistoryCompressionThreshold ?? 20;
+                history.AddRange(HistoryManager.GetHistory().Skip(Math.Max(0, HistoryManager.GetHistory().Count - threshold)));
+            }
+
+            // Inject important records into history (only when explicitly requested)
+            if (injectRecords)
+            {
+                history = InjectRecordsIntoHistory(history);
+            }
+
+            result.History = history;
+            return result;
         }
 
         /// <summary>
